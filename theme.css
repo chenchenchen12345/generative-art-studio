@@ -1,0 +1,117 @@
+/* ============================================================
+   SHARED SITE THEME — dark indigo + dot-grid, monospace type
+   Referenced by index.html and every sketch page so the whole
+   site reads as one consistent thing, not separate pages.
+   ============================================================ */
+
+:root {
+  --kb-bg:      #3d3a8f;   /* page background — indigo/purple */
+  --kb-dot:     rgba(255, 255, 255, 0.5);   /* background dot-grid texture */
+  --kb-white:   #ffffff;
+  --kb-dim:     rgba(255, 255, 255, 0.7);   /* secondary text */
+  --kb-font:    'Space Mono', monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; min-height: 100vh; }
+
+body.kb {
+  background-color: var(--kb-bg);
+  background-image: radial-gradient(circle, var(--kb-dot) 1px, transparent 1px);
+  background-size: 13px 13px;
+  color: var(--kb-white);
+  font-family: var(--kb-font);
+}
+
+/* Top nav, shared brand/link row */
+.kb-nav { padding: 22px 28px 0; }
+.kb-nav-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 28px;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  line-height: 2;
+}
+.kb-nav a { color: var(--kb-white); text-decoration: none; }
+.kb-nav a:hover { text-decoration: underline; }
+.kb-brand { color: var(--kb-white); }
+
+/* Back-to-menu link used on sketch pages */
+a.kb-backlink {
+  display: inline-block;
+  border: 2px solid var(--kb-white);
+  color: var(--kb-white);
+  text-decoration: none;
+  padding: 4px 12px;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+a.kb-backlink:hover { background: var(--kb-white); color: var(--kb-bg); }
+
+/* Bordered outline panel — cards, control clusters */
+.kb-panel {
+  border: 2px solid var(--kb-white);
+  background: var(--kb-bg);
+  padding: 16px 20px;
+}
+
+/* Small bracket-style tag, e.g. "AUDIO REACTIVE" */
+.kb-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--kb-dim);
+  border: 1px solid currentColor;
+  padding: 3px 8px;
+}
+
+/* Outline button, inverts on hover/active */
+.kb-button {
+  font-family: var(--kb-font);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--kb-white);
+  border: 2px solid var(--kb-white);
+  padding: 10px 20px;
+  cursor: pointer;
+}
+.kb-button:hover { background: var(--kb-white); color: var(--kb-bg); }
+.kb-button.active { background: var(--kb-white); color: var(--kb-bg); }
+.kb-button.recording { background: #ff4d4d; border-color: #ff4d4d; color: #2a0000; }
+
+/* Read-only level meter */
+.kb-meter { width: 60px; height: 10px; background: rgba(0,0,0,0.25); border: 1px solid var(--kb-white); overflow: hidden; }
+.kb-meter-fill { height: 100%; background: var(--kb-white); width: 0%; transition: width 0.05s linear; }
+
+/* Start-audio overlay sitting over a canvas */
+.kb-overlay {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  background: rgba(30, 28, 80, 0.94);
+  padding: 20px;
+  text-align: center;
+}
+.kb-overlay p { font-size: 13px; color: var(--kb-dim); max-width: 320px; margin: 0; line-height: 1.6; }
+
+/* Footer strip */
+.kb-footer {
+  padding: 18px 28px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  justify-content: space-between;
+}

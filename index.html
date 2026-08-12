@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generative Art Studio — Photobooth</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theme.css">
+<style>
+  html, body { height: 100%; overflow-x: hidden; }
+  body.kb { display: flex; flex-direction: column; }
+
+  .pb-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 16px 20px 90px;
+    gap: 12px;
+  }
+
+  .pb-intro { text-align: center; max-width: 640px; }
+  .pb-intro h1 { font-size: 20px; letter-spacing: 0.1em; text-transform: uppercase; margin: 8px 0 6px; }
+  .pb-intro p { font-size: 13px; line-height: 1.5; color: var(--kb-dim); margin: 0; }
+
+  /* ---- stage: the live tile wall + frosted gate sit on top of each other ---- */
+  .pb-stage-wrap {
+    position: relative;
+    width: min(92vw, 760px);
+    transition: width 0.55s cubic-bezier(.2,.8,.2,1), height 0.55s cubic-bezier(.2,.8,.2,1);
+  }
+  .pb-stage-wrap.focused {
+    width: min(96vw, 1300px);
+    height: 76vh;
+  }
+
+  .pb-grid {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-content: center;
+    gap: 16px;
+  }
+  .pb-stage-wrap.focused .pb-grid {
+    position: absolute;
+    inset: 0;
+  }
+
+  .pb-tile {
+    position: relative;
+    width: clamp(150px, min(22vw, 24vh), 240px);
+    aspect-ratio: 1;
+    border: 2px solid var(--kb-white);
+    background: #000;
+    overflow: hidden;
+    cursor: pointer;
+    transition: opacity 0.4s ease, transform 0.4s ease, box-shadow 0.15s ease, width 0.4s ease, height 0.4s ease;
+  }
+  .pb-grid:not(.ready) .pb-tile { pointer-events: none; }
+  .pb-tile:hover { box-shadow: 0 0 0 3px rgba(255,255,255,0.3) inset; }
+
+  .pb-stage-wrap.focused .pb-tile {
+    opacity: 0;
+    transform: scale(0.92);
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .pb-stage-wrap.focused .pb-tile.active {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+    position: relative;
+    inset: auto;
+    width: 100%;
+    height: 100%;
+    cursor: default;
+  }
+
+  .pb-tile-canvas { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  .pb-tile-canvas canvas { display: block; width: 100% !important; height: 100% !important; object-fit: contain; }
+
+  .pb-tile-label {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 10px 12px;
+    background: linear-gradient(to top, rgba(0,0,0,0.75), transparent);
+    pointer-events: none;
+  }
+  .pb-tile-title { font-size: 13px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--kb-white); margin-top: 4px; }
+  .pb-stage-wrap.focused .pb-tile.active .pb-tile-label { display: none; }
+
+  .pb-tile-lock {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--kb-dim);
+  }
+  .pb-grid.ready .pb-tile-lock { display: none; }
+
+  /* ---- frosted gate overlay ---- */
+  .pb-gate {
+    position: absolute; inset: -2px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(30, 28, 80, 0.86);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 2px solid var(--kb-white);
+    transition: opacity 0.5s ease;
+    z-index: 10;
+  }
+  .pb-gate.hidden { opacity: 0; pointer-events: none; }
+  .pb-gate-inner { text-align: center; max-width: 420px; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .pb-gate-inner p { font-size: 13px; line-height: 1.6; color: var(--kb-dim); margin: 0; }
+  .pb-enable-btn { font-size: 15px; padding: 14px 30px; }
+  .pb-gate-hint { font-size: 11px; letter-spacing: 0.05em; color: var(--kb-dim); min-height: 14px; }
+
+  body.pb-focused .kb-nav,
+  body.pb-focused .pb-intro,
+  body.pb-focused .kb-footer { display: none; }
+  body.pb-focused .pb-main { padding-top: 0; justify-content: center; }
+
+  .pb-back-btn {
+    position: fixed; top: 18px; left: 18px; z-index: 70;
+    font-family: var(--kb-font); font-weight: 700; font-size: 12px; letter-spacing: 0.15em; text-transform: uppercase;
+    background: var(--kb-bg); color: var(--kb-white); border: 2px solid var(--kb-white);
+    padding: 8px 16px; cursor: pointer;
+  }
+  .pb-back-btn:hover { background: var(--kb-white); color: var(--kb-bg); }
+
+  /* ---- recording indicator: fixed and visible regardless of drawer/focus state ---- */
+  .pb-rec-indicator {
+    position: fixed; top: 18px; right: 18px; z-index: 80;
+    display: flex; align-items: center; gap: 9px;
+    font-family: var(--kb-font); font-weight: 700; font-size: 12px; letter-spacing: 0.15em; text-transform: uppercase;
+    background: var(--kb-bg); color: #fff; border: 2px solid #ff4d4d;
+    padding: 8px 14px;
+  }
+  .pb-rec-dot { width: 10px; height: 10px; border-radius: 50%; background: #ff4d4d; animation: pbRecBlink 1.1s infinite; }
+  @keyframes pbRecBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+  .pb-stage-wrap.recording { box-shadow: 0 0 0 3px #ff4d4d; }
+
+  /* ---- camera flash ---- */
+  .pb-flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 200; }
+
+  /* ---- control drawer ---- */
+  .pb-drawer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: flex; flex-direction: column; align-items: center; }
+  .pb-drawer-tab {
+    font-family: var(--kb-font); font-weight: 700; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase;
+    background: var(--kb-white); color: var(--kb-bg); border: none; border-radius: 4px 4px 0 0;
+    padding: 7px 22px; cursor: pointer;
+  }
+  .pb-drawer-body {
+    width: min(100%, 900px);
+    background: var(--kb-bg);
+    border: 2px solid var(--kb-white);
+    border-bottom: none;
+    box-sizing: border-box;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+  }
+  .pb-drawer.open .pb-drawer-body { max-height: 62vh; overflow-y: auto; }
+  .pb-drawer-content { padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 16px; }
+
+  .pb-meters { display: flex; flex-wrap: wrap; gap: 12px 20px; justify-content: center; }
+  .meterRow { display: flex; gap: 10px; align-items: center; font-size: 12px; letter-spacing: 0.08em; color: var(--kb-dim); text-transform: uppercase; }
+  .meterVal { font-size: 11px; color: var(--kb-white); min-width: 46px; }
+  .gainRow { display: flex; gap: 10px; align-items: center; font-size: 12px; letter-spacing: 0.08em; color: var(--kb-dim); text-transform: uppercase; justify-content: center; flex-wrap: wrap; }
+  .gainRow input[type="range"] { width: 180px; }
+  .gainRow span { min-width: 34px; color: var(--kb-white); }
+
+  .pb-drawer-section { border-top: 1px solid rgba(255,255,255,0.25); padding-top: 14px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .midiStatusRow { font-size: 12px; letter-spacing: 0.05em; color: var(--kb-dim); text-align: center; }
+  .knobList { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--kb-white); align-items: center; }
+  .knobHint { font-size: 11px; letter-spacing: 0.02em; color: var(--kb-dim); max-width: 480px; text-align: center; }
+
+  /* fixed width so the label swap (RECORD SESSION <-> STOP) never
+     resizes/recenters the button out from under the cursor */
+  #recBtn { min-width: 210px; }
+
+  @media (max-width: 560px) {
+    .pb-stage-wrap.focused { height: 70vh; }
+  }
+</style>
+</head>
+<body class="kb">
+
+<header class="kb-nav">
+  <div class="kb-nav-row">
+    <span class="kb-brand">Generative</span>
+    <span class="kb-brand">Art&nbsp;Studio</span>
+  </div>
+  <div class="kb-nav-row">
+    <span>Mic</span><span>+</span><span>MIDI</span><span>Driven</span><span>Photobooth</span>
+  </div>
+</header>
+
+<main class="pb-main">
+  <div class="pb-intro">
+    <span class="kb-badge">5 pieces · 1 shared mic feed</span>
+    <h1>The Booth</h1>
+    <p>Enable audio once and all five squares come alive together, reacting to whatever you play or sing. Click any square to step inside it alone.</p>
+  </div>
+
+  <div class="pb-stage-wrap" id="stageWrap">
+    <div class="pb-grid" id="grid">
+      <div class="pb-tile" data-id="cellular-automata">
+        <div class="pb-tile-canvas" id="tile-cellular-automata"></div>
+        <div class="pb-tile-lock">Locked</div>
+        <div class="pb-tile-label"><span class="kb-card-tag">Audio Reactive</span><div class="pb-tile-title">Cellular Automata</div></div>
+      </div>
+      <div class="pb-tile" data-id="slime-mold">
+        <div class="pb-tile-canvas" id="tile-slime-mold"></div>
+        <div class="pb-tile-lock">Locked</div>
+        <div class="pb-tile-label"><span class="kb-card-tag">Audio + MIDI</span><div class="pb-tile-title">Slime Mold Bloom</div></div>
+      </div>
+      <div class="pb-tile" data-id="sound-grid">
+        <div class="pb-tile-canvas" id="tile-sound-grid"></div>
+        <div class="pb-tile-lock">Locked</div>
+        <div class="pb-tile-label"><span class="kb-card-tag">Audio Reactive</span><div class="pb-tile-title">Sound Grid</div></div>
+      </div>
+      <div class="pb-tile" data-id="resonance-field">
+        <div class="pb-tile-canvas" id="tile-resonance-field"></div>
+        <div class="pb-tile-lock">Locked</div>
+        <div class="pb-tile-label"><span class="kb-card-tag">Audio Reactive</span><div class="pb-tile-title">Resonance Field</div></div>
+      </div>
+      <div class="pb-tile" data-id="neural-network">
+        <div class="pb-tile-canvas" id="tile-neural-network"></div>
+        <div class="pb-tile-lock">Locked</div>
+        <div class="pb-tile-label"><span class="kb-card-tag">Audio Reactive</span><div class="pb-tile-title">Neural Network</div></div>
+      </div>
+    </div>
+
+    <div class="pb-gate" id="gate">
+      <div class="pb-gate-inner">
+        <p>This needs mic access to analyze sound. If you have a MIDI controller, plug it in — it's auto-detected. Nothing is sent anywhere; analysis happens live in your browser, and nothing is recorded unless you press Record.</p>
+        <button class="kb-button pb-enable-btn" id="enableBtn">Enable Audio</button>
+        <div class="pb-gate-hint" id="gateHint"></div>
+      </div>
+    </div>
+  </div>
+
+  <button class="pb-back-btn" id="backBtn" hidden>&larr; Back to grid</button>
+</main>
+
+<div class="pb-rec-indicator" id="recIndicator" hidden><span class="pb-rec-dot"></span>REC <span id="recTimer">00:00</span></div>
+
+<div class="pb-flash" id="flash"></div>
+
+<div class="pb-drawer" id="drawer" hidden>
+  <button class="pb-drawer-tab" id="drawerTab">Controls ▲</button>
+  <div class="pb-drawer-body">
+    <div class="pb-drawer-content">
+      <div class="pb-meters">
+        <div class="meterRow">Bass <div class="kb-meter"><div class="kb-meter-fill" id="bassMeter"></div></div> <span class="meterVal" id="bassVal">0.0%</span></div>
+        <div class="meterRow">Mid <div class="kb-meter"><div class="kb-meter-fill" id="midMeter"></div></div> <span class="meterVal" id="midVal">0.0%</span></div>
+        <div class="meterRow">Treble <div class="kb-meter"><div class="kb-meter-fill" id="trebMeter"></div></div> <span class="meterVal" id="trebVal">0.0%</span></div>
+        <div class="meterRow">Volume <div class="kb-meter"><div class="kb-meter-fill" id="volMeter"></div></div> <span class="meterVal" id="volVal">0.00%</span></div>
+      </div>
+      <div class="gainRow">
+        MIC GAIN
+        <input type="range" id="micGainSlider" min="1" max="40" step="0.5" value="6">
+        <span id="micGainVal">6x</span>
+      </div>
+
+      <div class="pb-drawer-section">
+        <div class="midiStatusRow">MIDI: <span id="midiStatus">waiting for Start Audio...</span></div>
+        <div id="knobList" class="knobList"></div>
+        <div class="knobHint">Any MIDI note plays the shared synth (mixed with your mic) and counts as a beat everywhere. Knobs 1&ndash;3 shape the synth's tone; knobs 4&ndash;6 shape Slime Mold's growth specifically.</div>
+      </div>
+
+      <div class="pb-drawer-section">
+        <button class="kb-button" id="recBtn">&#9679; RECORD SESSION</button>
+        <div class="knobHint">Captures whatever's on screen — the grid, or the tile you've focused — as video, mixed with your mic and controller. Saves straight to your Downloads folder the moment you stop, nothing is uploaded.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="kb-footer">
+  <span>All rights reserved © Generative Art Studio 2026</span>
+  <span>Audio + MIDI Driven</span>
+</footer>
+
+<script src="js/shared-audio.js"></script>
+<script src="sketches/sketch-cellular-automata.js"></script>
+<script src="sketches/sketch-slime-mold.js"></script>
+<script src="sketches/sketch-sound-grid.js"></script>
+<script src="sketches/sketch-resonance-field.js"></script>
+<script src="sketches/sketch-neural-network.js"></script>
+<script>
+// ============================================================
+// PHOTOBOOTH SHELL — wires the gate, the 2x2 live grid, the
+// focus/unfocus interaction, and the shared control drawer.
+// ============================================================
+const gate = document.getElementById('gate');
+const gateHint = document.getElementById('gateHint');
+const enableBtn = document.getElementById('enableBtn');
+const grid = document.getElementById('grid');
+const stageWrap = document.getElementById('stageWrap');
+const backBtn = document.getElementById('backBtn');
+const drawer = document.getElementById('drawer');
+const drawerTab = document.getElementById('drawerTab');
+const flash = document.getElementById('flash');
+
+let activeTileId = null;
+
+function doFlash() {
+  flash.style.transition = 'none';
+  flash.style.opacity = '1';
+  requestAnimationFrame(() => {
+    flash.style.transition = 'opacity 0.6s ease';
+    flash.style.opacity = '0';
+  });
+}
+
+enableBtn.addEventListener('click', () => {
+  enableBtn.disabled = true;
+  gateHint.textContent = 'Requesting microphone…';
+
+  AudioShared.start(() => {
+    doFlash();
+    gate.classList.add('hidden');
+    grid.classList.add('ready');
+    drawer.hidden = false;
+
+    createCellularAutomataSketch(document.getElementById('tile-cellular-automata'));
+    createSlimeMoldSketch(document.getElementById('tile-slime-mold'));
+    createSoundGridSketch(document.getElementById('tile-sound-grid'));
+    createResonanceFieldSketch(document.getElementById('tile-resonance-field'));
+    createNeuralNetworkSketch(document.getElementById('tile-neural-network'));
+
+    startUiLoop();
+  }, () => {
+    enableBtn.disabled = false;
+    gateHint.textContent = 'Mic access was blocked. Check your browser permissions and try again.';
+  });
+});
+
+grid.addEventListener('click', (e) => {
+  if (!AudioShared.ready) return;
+  const tile = e.target.closest('.pb-tile');
+  if (!tile) return;
+  focusTile(tile.dataset.id);
+});
+
+function focusTile(id) {
+  activeTileId = id;
+  stageWrap.classList.add('focused');
+  document.body.classList.add('pb-focused');
+  document.querySelectorAll('.pb-tile').forEach((t) => {
+    t.classList.toggle('active', t.dataset.id === id);
+  });
+  backBtn.hidden = false;
+}
+
+function unfocus() {
+  activeTileId = null;
+  stageWrap.classList.remove('focused');
+  document.body.classList.remove('pb-focused');
+  document.querySelectorAll('.pb-tile').forEach((t) => t.classList.remove('active'));
+  backBtn.hidden = true;
+}
+
+backBtn.addEventListener('click', unfocus);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && activeTileId) unfocus();
+});
+
+drawerTab.addEventListener('click', () => {
+  const open = drawer.classList.toggle('open');
+  drawerTab.textContent = open ? 'Controls ▲' : 'Controls ▼';
+});
+
+document.getElementById('micGainSlider').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  AudioShared.setMicGain(v);
+  document.getElementById('micGainVal').textContent = v + 'x';
+});
+
+// ---- recording: composites whatever's on screen (the grid, or the
+// focused tile) into a hidden canvas and captures that as video,
+// muxed with the shared mic+synth audio, so recordings hold the
+// art and the music together instead of audio alone ----
+const TILE_IDS = ['cellular-automata', 'slime-mold', 'sound-grid', 'resonance-field', 'neural-network'];
+const recordCanvas = document.createElement('canvas');
+recordCanvas.width = 960;
+recordCanvas.height = 960;
+const recordCtx = recordCanvas.getContext('2d');
+
+function drawContain(cnv, x, y, w, h) {
+  if (!cnv) return;
+  const scale = Math.min(w / cnv.width, h / cnv.height);
+  const dw = cnv.width * scale, dh = cnv.height * scale;
+  recordCtx.drawImage(cnv, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+}
+
+function drawRecordFrame() {
+  recordCtx.fillStyle = '#000';
+  recordCtx.fillRect(0, 0, recordCanvas.width, recordCanvas.height);
+  if (activeTileId) {
+    drawContain(document.querySelector('#tile-' + activeTileId + ' canvas'), 0, 0, recordCanvas.width, recordCanvas.height);
+  } else {
+    const cols = 3, rows = 2;
+    const cw = recordCanvas.width / cols, ch = recordCanvas.height / rows;
+    TILE_IDS.forEach((id, i) => {
+      const cnv = document.querySelector('#tile-' + id + ' canvas');
+      drawContain(cnv, (i % cols) * cw, Math.floor(i / cols) * ch, cw, ch);
+    });
+  }
+}
+
+function recordLoop() {
+  if (AudioShared.isRecording) drawRecordFrame();
+  requestAnimationFrame(recordLoop);
+}
+recordLoop();
+
+const recIndicator = document.getElementById('recIndicator');
+const recTimer = document.getElementById('recTimer');
+let recStartTime = 0;
+let recTimerInterval = null;
+
+function formatElapsed(ms) {
+  const s = Math.floor(ms / 1000);
+  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+}
+
+document.getElementById('recBtn').addEventListener('click', () => {
+  if (!AudioShared.isRecording) {
+    drawRecordFrame();
+    AudioShared.toggleRecording(recordCanvas.captureStream(30));
+    recStartTime = Date.now();
+    recIndicator.hidden = false;
+    recTimer.textContent = '00:00';
+    stageWrap.classList.add('recording');
+    recTimerInterval = setInterval(() => {
+      recTimer.textContent = formatElapsed(Date.now() - recStartTime);
+    }, 250);
+  } else {
+    AudioShared.toggleRecording();
+    recIndicator.hidden = true;
+    stageWrap.classList.remove('recording');
+    clearInterval(recTimerInterval);
+  }
+  updateRecordBtn();
+});
+
+function updateRecordBtn() {
+  const btn = document.getElementById('recBtn');
+  btn.textContent = AudioShared.isRecording ? '■ STOP' : '● RECORD SESSION';
+  btn.classList.toggle('recording', AudioShared.isRecording);
+}
+
+AudioShared.onMidiStatusChange((text) => {
+  document.getElementById('midiStatus').textContent = text;
+});
+
+AudioShared.onKnobsChange((knobCCMap, knobSlots) => {
+  const list = document.getElementById('knobList');
+  list.innerHTML = '';
+  for (const cc in knobCCMap) {
+    const row = document.createElement('div');
+    row.textContent = 'CC' + cc + ' → ' + knobSlots[knobCCMap[cc]];
+    list.appendChild(row);
+  }
+});
+
+function startUiLoop() {
+  function tick() {
+    if (AudioShared.ready) {
+      AudioShared.fft.analyze();
+      const bass = AudioShared.fft.getEnergy('bass') / 255;
+      const mid = AudioShared.fft.getEnergy('mid') / 255;
+      const treble = AudioShared.fft.getEnergy('treble') / 255;
+      const volume = AudioShared.amp.getLevel();
+
+      document.getElementById('bassMeter').style.width = (bass * 100) + '%';
+      document.getElementById('midMeter').style.width = (mid * 100) + '%';
+      document.getElementById('trebMeter').style.width = (treble * 100) + '%';
+      document.getElementById('volMeter').style.width = (Math.min(100, volume * 300)) + '%';
+
+      document.getElementById('bassVal').textContent = (bass * 100).toFixed(1) + '%';
+      document.getElementById('midVal').textContent = (mid * 100).toFixed(1) + '%';
+      document.getElementById('trebVal').textContent = (treble * 100).toFixed(1) + '%';
+      document.getElementById('volVal').textContent = (volume * 100).toFixed(2) + '%';
+
+      updateRecordBtn();
+    }
+    requestAnimationFrame(tick);
+  }
+  tick();
+}
+</script>
+
+</body>
+</html>

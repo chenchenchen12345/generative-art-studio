@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>RESONANCE FIELD — AUDIO REACTIVE</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theme.css">
+<style>
+  body.kb {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 20px 50px;
+  }
+  .kb-nav { align-self: flex-start; padding: 0 0 14px; }
+  h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; margin: 0 0 6px; }
+  p.sub { font-size: 13px; letter-spacing: 0.02em; line-height: 1.6; color: var(--kb-dim); margin: 0 0 18px; text-align: center; max-width: 620px; }
+  #canvas-holder { border: 2px solid var(--kb-white); overflow: hidden; position: relative; }
+  .panel { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 14px; max-width: 640px; justify-content: center; align-items: center; }
+  .meterRow { display: flex; gap: 10px; align-items: center; font-size: 12px; letter-spacing: 0.08em; color: var(--kb-dim); text-transform: uppercase; }
+  .modeReadout { font-size: 11px; letter-spacing: 0.15em; color: var(--kb-dim); text-transform: uppercase; text-align: center; }
+</style>
+</head>
+<body class="kb">
+
+<header class="kb-nav">
+  <a class="kb-backlink" href="index.html">&larr; Menu</a>
+</header>
+
+<h1>Resonance Field</h1>
+<p class="sub">A Chladni plate, made of sound instead of metal: thousands of grains hunt for the standing-wave nodes of a vibrating surface, the same way sand collects into geometric figures on a real plate driven by a tone generator. The pitch of your voice or instrument bends which pattern the plate wants to form; louder input shakes the grains loose, and they resettle the instant it's quiet again.</p>
+
+<div id="canvas-holder">
+  <div class="kb-overlay" id="overlay">
+    <p>This needs mic access to analyze sound. Nothing is recorded or sent anywhere — analysis happens live in your browser.</p>
+    <button class="kb-button" id="startBtn">Start Audio + Enable Mic</button>
+  </div>
+</div>
+
+<div class="panel kb-panel">
+  <div class="meterRow">Bass <div class="kb-meter"><div class="kb-meter-fill" id="bassMeter"></div></div></div>
+  <div class="meterRow">Mid <div class="kb-meter"><div class="kb-meter-fill" id="midMeter"></div></div></div>
+  <div class="meterRow">Treble <div class="kb-meter"><div class="kb-meter-fill" id="trebMeter"></div></div></div>
+  <div class="meterRow">Volume <div class="kb-meter"><div class="kb-meter-fill" id="volMeter"></div></div></div>
+</div>
+<div class="panel">
+  <div class="modeReadout" id="modeReadout">Mode — · —</div>
+</div>
+
+<script>
+// ============================================================
+// RESONANCE FIELD — a Chladni plate driven by live pitch/volume
+// ============================================================
+// Real Chladni plates: sprinkle sand on a metal plate, bow or
+// vibrate it at a pure tone, and the sand migrates away from the
+// antinodes (where the plate moves the most) and collects along
+// the nodal lines (where it doesn't move at all) - the frequency
+// of the tone sets which geometric figure appears, because it
+// sets which vibration mode (m,n) the plate is resonating in.
+//
+// This sketch is that idea done with a live mic instead of a
+// signal generator: each frame we estimate the dominant pitch
+// and let it steer a pair of continuous mode numbers (n, m); the
+// classic square-plate eigenfunction
+//   F(x,y) = cos(n*pi*x)*cos(m*pi*y) - cos(m*pi*x)*cos(n*pi*y)
+// gives the "height" of the plate at every point, and each grain
+// takes a small random step every frame, keeping it only if that
+// step moved it closer to F=0 (a nodal line) - or, with a small
+// chance that grows with volume, keeping a worse step anyway.
+// That's the whole mechanic: quiet + steady pitch = the pattern
+// crystallizes; loud = it scatters and goes looking for the next
+// one. A bass hit gives it one extra hard shake, like striking
+// the plate.
+
+const NUM_GRAINS = 3000;
+let grains = [];
+
+let mic, micBoost, fft, amp;
+let audioReady = false;
+let MIC_GAIN = 6;
+
+let smoothedPitchMode = 3;   // slowly-tracked "n" - driven by dominant pitch
+let smoothedOffset = 2;      // "m" = n + this - driven by treble brightness
+let smoothedVolume = 0;
+let prevBass = 0;
+let kick = 0;                // brief extra agitation on a bass hit, like striking the plate
+
+function setup() {
+  let cnv = createCanvas(520, 520);
+  cnv.parent('canvas-holder');
+  document.getElementById('canvas-holder').style.width = width + 'px';
+  document.getElementById('canvas-holder').style.height = height + 'px';
+  colorMode(HSB, 360, 100, 100, 100);
+  background(235, 40, 5);
+  for (let i = 0; i < NUM_GRAINS; i++) {
+    grains.push({ x: random(-1, 1), y: random(-1, 1) });
+  }
+  describe('A Chladni-plate simulation: sand-like grains settle onto the standing-wave nodal lines of a virtual vibrating plate. The plate\'s vibration mode is steered by the dominant pitch picked up from the microphone, so different notes produce different geometric figures, while louder input scatters the grains until the sound quiets down again.', LABEL);
+}
+
+function startAudio() {
+  userStartAudio().then(() => {
+    mic = new p5.AudioIn();
+    let rawConstraints = {
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      video: false
+    };
+    mic.start(() => {
+      micBoost = new p5.Gain();
+      micBoost.setInput(mic);
+      micBoost.amp(MIC_GAIN);
+
+      fft = new p5.FFT(0.7, 1024);
+      fft.setInput(micBoost);
+      amp = new p5.Amplitude(0.3);
+      amp.setInput(micBoost);
+
+      audioReady = true;
+      document.getElementById('overlay').style.display = 'none';
+    }, () => {
+      document.getElementById('overlay').innerHTML =
+        '<p>Mic access was blocked. Check your browser permissions and reload to try again.</p>';
+    }, rawConstraints);
+  });
+}
+
+// The square-plate Chladni eigenfunction - zero along the nodal
+// lines that give each (n,m) pair its distinctive figure.
+function chladni(x, y, n, m) {
+  return cos(n * PI * x) * cos(m * PI * y) - cos(m * PI * x) * cos(n * PI * y);
+}
+
+function draw() {
+  if (!audioReady) return;
+
+  let spectrum = fft.analyze();
+  let bass = fft.getEnergy('bass') / 255;
+  let mid = fft.getEnergy('mid') / 255;
+  let treble = fft.getEnergy('treble') / 255;
+  let volume = amp.getLevel();
+
+  document.getElementById('bassMeter').style.width = (bass * 100) + '%';
+  document.getElementById('midMeter').style.width = (mid * 100) + '%';
+  document.getElementById('trebMeter').style.width = (treble * 100) + '%';
+  document.getElementById('volMeter').style.width = (constrain(volume * 300, 0, 100)) + '%';
+
+  // --- crude pitch estimate: loudest bin between 80-2000Hz ---
+  let sr = getAudioContext().sampleRate;
+  let nyquist = sr / 2;
+  let loBin = floor((80 / nyquist) * spectrum.length);
+  let hiBin = floor((2000 / nyquist) * spectrum.length);
+  let peakBin = loBin, peakVal = 0;
+  for (let i = loBin; i <= hiBin; i++) {
+    if (spectrum[i] > peakVal) { peakVal = spectrum[i]; peakBin = i; }
+  }
+  let peakFreq = (peakBin / spectrum.length) * nyquist;
+  let normPeak = peakVal / 255;
+
+  // Only chase a new mode when there's a clear-enough pitch to
+  // read - otherwise drift gently back toward a calm default so
+  // silence still resolves into a simple, restful figure.
+  if (normPeak > 0.12) {
+    let t = constrain(log(peakFreq / 80) / log(2000 / 80), 0, 1);
+    let targetMode = lerp(2, 10, t);
+    smoothedPitchMode += (targetMode - smoothedPitchMode) * 0.035;
+  } else {
+    smoothedPitchMode += (3 - smoothedPitchMode) * 0.008;
+  }
+  let targetOffset = 1.5 + treble * 5;
+  smoothedOffset += (targetOffset - smoothedOffset) * 0.05;
+  smoothedVolume += (volume - smoothedVolume) * 0.15;
+
+  let n = smoothedPitchMode;
+  let m = n + smoothedOffset;
+
+  document.getElementById('modeReadout').textContent =
+    'Mode n=' + n.toFixed(2) + ' · m=' + m.toFixed(2);
+
+  // a sudden bass hit gives the grains one extra hard shake
+  kick *= 0.88;
+  let bassJump = bass - prevBass;
+  if (bassJump > 0.18) kick = min(1, kick + bassJump * 1.6);
+  prevBass = bass;
+
+  let agitation = constrain(pow(smoothedVolume * 6, 0.6), 0, 1.4) + kick * 0.9;
+
+  blendMode(BLEND);
+  background(235, 40, 5, 10);
+
+  blendMode(ADD);
+  let hue = map(n, 2, 10, 195, 330);
+  strokeWeight(2.2);
+  for (let g of grains) {
+    let stepSize = 0.006 + agitation * 0.05;
+    let nx = constrain(g.x + random(-stepSize, stepSize), -1, 1);
+    let ny = constrain(g.y + random(-stepSize, stepSize), -1, 1);
+    let curV = abs(chladni(g.x, g.y, n, m));
+    let newV = abs(chladni(nx, ny, n, m));
+    let acceptChance = 0.02 + agitation * 0.22;
+    if (newV < curV || random() < acceptChance) {
+      g.x = nx; g.y = ny;
+    }
+    let bri = 55 + (1 - constrain(curV, 0, 1)) * 20 + agitation * 18;
+    stroke(hue, 85, bri, 70);
+    point(map(g.x, -1, 1, 0, width), map(g.y, -1, 1, 0, height));
+  }
+  blendMode(BLEND);
+}
+
+document.getElementById('startBtn').addEventListener('click', startAudio);
+</script>
+
+</body>
+</html>

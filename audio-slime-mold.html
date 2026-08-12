@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>SLIME MOLD BLOOM — AUDIO REACTIVE</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theme.css">
+<style>
+  body.kb {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 20px 50px;
+  }
+  .kb-nav { align-self: flex-start; padding: 0 0 14px; }
+  h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; margin: 0 0 6px; }
+  p.sub { font-size: 13px; letter-spacing: 0.02em; line-height: 1.6; color: var(--kb-dim); margin: 0 0 18px; text-align: center; max-width: 620px; }
+  #canvas-holder { border: 2px solid var(--kb-white); overflow: hidden; position: relative; }
+  .panel { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 14px; max-width: 640px; justify-content: center; align-items: center; }
+  .meterRow { display: flex; gap: 10px; align-items: center; font-size: 12px; letter-spacing: 0.08em; color: var(--kb-dim); text-transform: uppercase; }
+  .meterVal { font-size: 11px; color: var(--kb-white); min-width: 46px; }
+  .gainRow { display: flex; gap: 10px; align-items: center; font-size: 12px; letter-spacing: 0.08em; color: var(--kb-dim); text-transform: uppercase; width: 100%; justify-content: center; }
+  .gainRow input[type="range"] { width: 180px; }
+  .gainRow span { min-width: 34px; color: var(--kb-white); }
+  .midiStatusRow { font-size: 12px; letter-spacing: 0.05em; color: var(--kb-dim); text-align: center; }
+  .knobList { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--kb-white); align-items: center; }
+  .recHint { font-size: 11px; letter-spacing: 0.02em; color: var(--kb-dim); max-width: 320px; text-align: center; }
+  .recordingsList { display: flex; flex-direction: column; gap: 4px; max-height: 100px; overflow-y: auto; width: 100%; }
+  .recordingsList a { color: var(--kb-white); font-size: 12px; text-decoration: underline; }
+</style>
+</head>
+<body class="kb">
+
+<header class="kb-nav">
+  <a class="kb-backlink" href="index.html">&larr; Menu</a>
+</header>
+
+<h1>Slime Mold Bloom</h1>
+<p class="sub">A colony germinates at the center of the canvas and branches outward, the way a real slime mold's plasmodium grows: veins extend from the edge of the mass, thicken where traffic is heavy, and fade where it's not. Your microphone and, if you plug one in, a MIDI controller are the only controls — no toggles. Sing, play, or both: notes are synthesized live, mixed with your mic, and analyzed the same way, so loud/bassy sound and hard-played notes both feed the colony and make it grow faster.</p>
+
+<div id="canvas-holder">
+  <div class="kb-overlay" id="overlay">
+    <p>This needs mic access to analyze sound. If you have a MIDI controller (keys, pads, knobs), plug it in - it's auto-detected. Nothing is sent anywhere; analysis happens live in your browser, and nothing is recorded unless you press Record.</p>
+    <button class="kb-button" id="startBtn">Start Audio + Enable Mic</button>
+  </div>
+</div>
+
+<div class="panel kb-panel">
+  <div class="meterRow">Bass <div class="kb-meter"><div class="kb-meter-fill" id="bassMeter"></div></div> <span class="meterVal" id="bassVal">0.0%</span></div>
+  <div class="meterRow">Mid <div class="kb-meter"><div class="kb-meter-fill" id="midMeter"></div></div> <span class="meterVal" id="midVal">0.0%</span></div>
+  <div class="meterRow">Treble <div class="kb-meter"><div class="kb-meter-fill" id="trebMeter"></div></div> <span class="meterVal" id="trebVal">0.0%</span></div>
+  <div class="meterRow">Volume <div class="kb-meter"><div class="kb-meter-fill" id="volMeter"></div></div> <span class="meterVal" id="volVal">0.00%</span></div>
+  <div class="gainRow">
+    MIC GAIN
+    <input type="range" id="micGainSlider" min="1" max="40" step="0.5" value="6">
+    <span id="micGainVal">6x</span>
+  </div>
+</div>
+
+<div class="panel kb-panel">
+  <div class="midiStatusRow">MIDI: <span id="midiStatus">waiting for Start Audio...</span></div>
+  <div id="knobList" class="knobList"></div>
+</div>
+
+<div class="panel kb-panel">
+  <button class="kb-button" id="recBtn">&#9679; RECORD</button>
+  <div class="recHint">Captures your mic and controller mixed together. Files stay on your device - download links appear below, nothing is uploaded.</div>
+  <div id="recordingsList" class="recordingsList"></div>
+</div>
+
+<script>
+// ============================================================
+// AUDIO-REACTIVE SLIME MOLD, GROWING LIKE A REAL PLASMODIUM
+// ============================================================
+// Real Physarum starts as a small mass (a germinated spore),
+// then sends out branching protoplasmic veins that thicken
+// wherever traffic is heavy and thin out wherever it isn't -
+// that's how the colony finds efficient paths and its overall
+// shape reads as a growing, branching network rather than a
+// static cloud. We copy that structure directly:
+//   - the colony starts as ~24 agents in a small cluster
+//     at the center (the "germination point")
+//   - new agents are born by budding off an existing agent
+//     near the growing edge, inheriting its heading with a
+//     branch angle - this is what produces the fanned,
+//     tree-like growth fronts real slime molds show
+//   - agents still sense/follow the shared trail map (the
+//     Physarum foraging algorithm), so paths that get walked
+//     a lot render thicker - a visible "vein" - and everything
+//     else fades away
+// Audio is the only control surface. Volume and bass energy
+// are the colony's "food": louder audio makes it germinate new
+// growth faster and triggers visible growth bursts on beats.
+// Mid/treble retune how widely and how far ahead agents sense,
+// and a slow audio-driven pulse makes the whole colony breathe,
+// echoing the rhythmic cytoplasmic streaming real plasmodia show.
+
+let molds = [];
+let num = 4000;
+let activeCount = 0; // agents born so far - the colony only ever grows
+
+let mic, micBoost, fft, amp;
+let audioReady = false;
+let MIC_GAIN = 6; // raw mic signal is often much quieter than you'd expect - bump this up if your meters still read low, or down if they're pinned at 100%
+
+// --- MIDI controller + built-in synth ---
+// A MIDI controller doesn't make sound by itself - it only sends note/
+// knob messages - so pressing a key does nothing until something turns
+// that message into audio. This built-in synth is that "something": each
+// note gets a voice from a small round-robin pool, and the whole synth is
+// mixed with the mic into one shared bus that both the analyzer and (if
+// you hit Record) the recorder listen to. Play, sing, or both.
+let synthFilter, synthGain, mixBus;
+let synthVoices = [];
+let NUM_VOICES = 6;
+let midiAccess = null;
+// Knobs are auto-assigned on first touch, in this order, so the sketch
+// works with any class-compliant MIDI controller without hardcoded CC
+// numbers - turn any knob and it claims the next open slot.
+let knobSlots = ['FILTER CUTOFF', 'PLUCK LENGTH', 'TONE (WAVE)', 'SENSOR WIDTH+', 'GROWTH RATE+', 'HUE SHIFT+'];
+let knobCCMap = {};
+let knobValues = new Array(knobSlots.length).fill(0.5); // 0.5 = neutral for the offset slots
+
+// --- recording ---
+let recordDest, mediaRecorderObj, recordedChunks = [];
+let isRecording = false;
+let recordings = [];
+
+let bass = 0, mid = 0, treble = 0, volume = 0;
+let prevBass = 0;
+let sensorAngle = 30;   // degrees, how wide the left/right sensors splay
+let sensorDist = 15;    // pixels ahead the sensors look
+let turnAngle = 30;     // degrees per step when steering
+let stepSize = 1;       // pixels moved per step
+let baseHue = 190;
+
+let growthEnergy = 0;   // "food" accumulator that spends itself germinating new agents
+let pulsePhase = 0;     // slow breathing cycle, like real cytoplasmic streaming
+let breathe = 0;
+let pulseFlash = 0;     // brief brightness/growth spike on strong beats
+
+function setup() {
+  let cnv = createCanvas(560, 420);
+  cnv.parent('canvas-holder');
+  document.getElementById('canvas-holder').style.width = '560px';
+  document.getElementById('canvas-holder').style.height = '420px';
+  pixelDensity(1); // keeps pixel-array indexing simple (1 array pixel per canvas pixel)
+  angleMode(DEGREES);
+  colorMode(HSB, 360, 100, 100, 100);
+  background(0, 0, 0);
+
+  for (let i = 0; i < num; i++) {
+    molds[i] = new Mold();
+  }
+  seedColony();
+
+  describe('Audio-reactive slime mold growth simulation. A small colony germinates at the center of the canvas and branches outward over time, the way a real slime mold plasmodium grows - new agents bud off the growing edge of the colony and steer toward the brightest existing trail, so heavily-used paths thicken into visible veins while unused ones fade. Microphone input controls everything: louder, bassier audio feeds faster growth and triggers growth bursts on beats, while volume, bass, mid, and treble continuously retune how the colony senses, moves, pulses, and is colored.', LABEL);
+}
+
+// The colony starts as a small cluster near the center, like a
+// spore that has just germinated, instead of agents scattered
+// across the whole canvas from frame one.
+function seedColony() {
+  let cx = width / 2, cy = height / 2;
+  let spots = [
+    { x: cx, y: cy },
+    { x: cx + random(-24, 24), y: cy + random(-24, 24) },
+    { x: cx + random(-24, 24), y: cy + random(-24, 24) }
+  ];
+  let initial = 24;
+  for (let i = 0; i < initial; i++) {
+    let s = spots[i % spots.length];
+    molds[activeCount].spawnAt(s.x + random(-5, 5), s.y + random(-5, 5), random(360));
+    activeCount++;
+  }
+}
+
+// Boosts small values more than large ones (exp < 1), so quiet
+// passages still move the piece instead of only loud peaks.
+function boost(v, exp) {
+  return pow(constrain(v, 0, 1), exp);
+}
+
+// Wakes up `n` more agents from the dormant pool, each one
+// budding off an already-active agent (biased toward recently
+// grown ones, i.e. the colony's current edge) with a branch
+// angle - this is what makes new growth fan outward instead of
+// refilling the center.
+function growColony(n) {
+  for (let k = 0; k < n && activeCount < num; k++) {
+    let parentIdx;
+    if (activeCount > 60) {
+      let recentSpan = max(30, floor(activeCount * 0.4));
+      parentIdx = activeCount - 1 - floor(random(recentSpan));
+    } else {
+      parentIdx = floor(random(activeCount));
+    }
+    parentIdx = constrain(parentIdx, 0, activeCount - 1);
+    let parent = molds[parentIdx];
+    let branchHeading = parent.heading + random(-55, 55);
+    let dist = random(2, 6);
+    let nx = ((parent.x + cos(branchHeading) * dist) % width + width) % width;
+    let ny = ((parent.y + sin(branchHeading) * dist) % height + height) % height;
+    molds[activeCount].spawnAt(nx, ny, branchHeading);
+    activeCount++;
+  }
+}
+
+function startAudio() {
+  userStartAudio().then(() => {
+    mic = new p5.AudioIn();
+    // Browsers auto-apply AGC + noise suppression to mic streams by default,
+    // which flattens loud/quiet into a similar level - exactly what makes a
+    // real singing voice barely move the volume meter. Disabling them here
+    // gets the analyzer your actual dynamics instead of the browser's guess.
+    let rawConstraints = {
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      video: false
+    };
+    mic.start(() => {
+      // Boost the raw signal before analysis - built-in/laptop mics are
+      // often quiet enough that even loud singing barely registers.
+      // Turning off AGC above gives us the true (weak) level, so we make
+      // up for it here with an explicit, controllable gain stage instead
+      // of leaving it to the browser's opaque auto-leveling.
+      micBoost = new p5.Gain();
+      micBoost.setInput(mic);
+      micBoost.amp(MIC_GAIN);
+
+      // synth signal chain: voices -> shared filter -> synthGain, which
+      // goes both to your speakers (so you can hear what you play) and
+      // into the shared mix bus below
+      synthFilter = new p5.Filter('lowpass');
+      synthFilter.freq(2200);
+      synthFilter.res(3);
+      synthGain = new p5.Gain();
+      synthGain.setInput(synthFilter);
+      synthGain.amp(0.9);
+      synthGain.connect(); // to speakers
+      for (let i = 0; i < NUM_VOICES; i++) synthVoices.push(new SynthVoice(synthFilter));
+
+      // mic and synth both feed one shared bus - this is what the
+      // analyzer reads and what Record captures, so either source (or
+      // both at once) drives the art and ends up in a recording
+      mixBus = new p5.Gain();
+      micBoost.connect(mixBus);
+      synthGain.connect(mixBus);
+
+      // low smoothing = fast, twitchy response instead of a lagging average
+      fft = new p5.FFT(0.4, 128);
+      fft.setInput(mixBus);
+      amp = new p5.Amplitude(0.25);
+      amp.setInput(mixBus);
+
+      let ctx = getAudioContext();
+      recordDest = ctx.createMediaStreamDestination();
+      mixBus.connect(recordDest);
+
+      audioReady = true;
+      document.getElementById('overlay').style.display = 'none';
+      initMIDI();
+    }, (err) => {
+      document.getElementById('overlay').innerHTML =
+        '<p>Mic access was blocked. Check your browser permissions and reload to try again.</p>';
+    }, rawConstraints);
+  });
+}
+
+function draw() {
+  if (!audioReady) return;
+
+  // --- read the shared audio feed once per frame ---
+  fft.analyze();
+  bass = fft.getEnergy('bass') / 255;
+  mid = fft.getEnergy('mid') / 255;
+  treble = fft.getEnergy('treble') / 255;
+  volume = amp.getLevel();
+
+  document.getElementById('bassMeter').style.width = (bass * 100) + '%';
+  document.getElementById('midMeter').style.width = (mid * 100) + '%';
+  document.getElementById('trebMeter').style.width = (treble * 100) + '%';
+  document.getElementById('volMeter').style.width = (constrain(volume * 300, 0, 100)) + '%';
+
+  // raw numeric readouts, at higher precision than the bars can show -
+  // if these stay near 0.00% even while you're loud, the signal genuinely
+  // isn't reaching the analyzer (see the mic gain slider below)
+  document.getElementById('bassVal').textContent = (bass * 100).toFixed(1) + '%';
+  document.getElementById('midVal').textContent = (mid * 100).toFixed(1) + '%';
+  document.getElementById('trebVal').textContent = (treble * 100).toFixed(1) + '%';
+  document.getElementById('volVal').textContent = (volume * 100).toFixed(2) + '%';
+
+  // audio -> sensing/movement parameters (wide ranges + boost() for high sensitivity)
+  sensorAngle = 15 + boost(mid, 0.55) * 150;      // mids = how wide the colony looks, i.e. how it branches
+  sensorDist = 4 + boost(treble, 0.55) * 70;      // treble = how far ahead it looks, i.e. how loose the veins are
+  turnAngle = 12 + boost(bass, 0.55) * 130;       // bass = how sharply it steers
+  stepSize = 0.35 + boost(volume, 0.5) * 11;      // volume = raw speed/energy
+  baseHue = (185 + boost(mid, 0.6) * 150) % 360;
+
+  // MIDI knobs 4-6 (once assigned) nudge these same parameters further -
+  // 0.5 is neutral (no offset), so an untouched knob does nothing
+  sensorAngle += (knobValues[3] - 0.5) * 100;
+  growthEnergy += max(0, knobValues[4] - 0.5) * 0.5;
+  baseHue = (baseHue + (knobValues[5] - 0.5) * 140 + 360) % 360;
+
+  // slow rhythmic breathing, like real plasmodial streaming, sped up by volume
+  pulsePhase += 0.6 + boost(volume, 0.5) * 2.5;
+  breathe = sin(pulsePhase) * 0.5 + 0.5;
+  stepSize *= 0.8 + breathe * 0.35;
+
+  // a sudden bass jump reads as a beat - flash brighter and burst new growth
+  pulseFlash *= 0.85;
+  let bassJump = bass - prevBass;
+  if (bassJump > 0.16) {
+    pulseFlash = min(1, pulseFlash + bassJump * 2);
+    growColony(floor(map(constrain(bassJump, 0, 0.6), 0.16, 0.6, 12, 70, true)));
+  }
+  prevBass = bass;
+
+  // steady "food" income from volume/bass keeps the colony germinating new veins
+  growthEnergy += boost(volume, 0.5) * 0.9 + boost(bass, 0.6) * 0.6;
+  while (growthEnergy > 1 && activeCount < num) {
+    growColony(floor(random(2, 7)));
+    growthEnergy -= 1;
+  }
+
+  // fade the old trail; louder audio keeps trails alive longer (lower alpha = slower fade)
+  let fadeAlpha = constrain(map(boost(volume, 0.5), 0, 1, 13, 2, true), 2, 13);
+  background(0, 0, 0, fadeAlpha);
+
+  loadPixels();
+  for (let i = 0; i < activeCount; i++) {
+    molds[i].update();
+  }
+  for (let i = 0; i < activeCount; i++) {
+    molds[i].display();
+  }
+}
+
+class Mold {
+  constructor() {
+    this.x = 0;
+    this.y = 0;
+    this.heading = 0;
+  }
+
+  spawnAt(x, y, heading) {
+    this.x = x;
+    this.y = y;
+    this.heading = heading;
+  }
+
+  sense(angleOffset) {
+    let a = this.heading + angleOffset;
+    let sx = floor(this.x + cos(a) * sensorDist);
+    let sy = floor(this.y + sin(a) * sensorDist);
+    sx = ((sx % width) + width) % width;
+    sy = ((sy % height) + height) % height;
+    let idx = 4 * (sy * width + sx);
+    // pixels[] holds raw RGBA regardless of colorMode - red channel doubles as trail intensity
+    return pixels[idx];
+  }
+
+  update() {
+    let front = this.sense(0);
+    let left = this.sense(sensorAngle);
+    let right = this.sense(-sensorAngle);
+
+    if (front >= left && front >= right) {
+      this.heading += random(-4, 4); // small organic wander, real veins aren't perfectly straight
+    } else if (left > right) {
+      this.heading += turnAngle;
+    } else if (right > left) {
+      this.heading -= turnAngle;
+    } else {
+      this.heading += random() < 0.5 ? turnAngle : -turnAngle;
+    }
+
+    this.x += stepSize * cos(this.heading);
+    this.y += stepSize * sin(this.heading);
+
+    // wrap around the edges instead of dying off-canvas
+    this.x = ((this.x % width) + width) % width;
+    this.y = ((this.y % height) + height) % height;
+  }
+
+  display() {
+    // thicker where the trail underneath is already well-worn - reads as a vein, not a haze
+    let sx = floor(((this.x % width) + width) % width);
+    let sy = floor(((this.y % height) + height) % height);
+    let local = pixels[4 * (sy * width + sx)];
+
+    let hue = (baseHue + treble * 160 + frameCount * 0.2) % 360;
+    let sat = constrain(55 + bass * 40, 0, 100);
+    let bri = constrain(50 + boost(volume, 0.5) * 45 + pulseFlash * 45, 0, 100);
+    let w = map(local, 0, 255, 1, 2.6) * (0.8 + breathe * 0.5);
+
+    stroke(hue, sat, bri, 92);
+    strokeWeight(w);
+    point(this.x, this.y);
+  }
+}
+
+// ============================================================
+// SYNTH VOICE - turns one MIDI note into actual sound
+// ============================================================
+class SynthVoice {
+  constructor(filterNode) {
+    this.osc = new p5.Oscillator('sawtooth');
+    this.osc.amp(0);
+    this.osc.disconnect();
+    this.osc.connect(filterNode);
+    this.osc.start();
+    this.env = new p5.Envelope();
+    this.env.setADSR(0.006, 0.12, 0.25, 0.4);
+    this.env.setRange(0.5, 0);
+    this.note = -1;
+    this.active = false;
+  }
+  setWaveform(type) {
+    this.osc.setType(type);
+  }
+  setRelease(r) {
+    this.env.setADSR(0.006, 0.12, 0.25, r);
+  }
+  noteOn(note, velocity) {
+    this.osc.freq(midiToFreq(note));
+    this.env.setRange(0.12 + velocity * 0.55, 0);
+    this.env.triggerAttack(this.osc);
+    this.note = note;
+    this.active = true;
+  }
+  noteOff(note) {
+    if (this.note === note) {
+      this.env.triggerRelease(this.osc);
+      this.active = false;
+    }
+  }
+}
+
+// ============================================================
+// MIDI - auto-detects any class-compliant controller, no setup
+// ============================================================
+function initMIDI() {
+  if (!navigator.requestMIDIAccess) {
+    setMidiStatus('Web MIDI not supported in this browser.');
+    return;
+  }
+  navigator.requestMIDIAccess().then((access) => {
+    midiAccess = access;
+    attachMIDIInputs();
+    access.onstatechange = attachMIDIInputs;
+  }).catch(() => setMidiStatus('MIDI access denied.'));
+}
+
+function attachMIDIInputs() {
+  let names = [];
+  midiAccess.inputs.forEach((input) => {
+    input.onmidimessage = handleMIDIMessage;
+    names.push(input.name);
+  });
+  setMidiStatus(names.length ? 'connected - ' + names.join(', ') : 'no device detected - plug one in');
+}
+
+function setMidiStatus(text) {
+  document.getElementById('midiStatus').textContent = text;
+}
+
+function handleMIDIMessage(msg) {
+  if (!audioReady) return;
+  let [status, d1, d2] = msg.data;
+  let cmd = status & 0xf0;
+  if (cmd === 0x90 && d2 > 0) {
+    noteOnHandler(d1, d2 / 127);
+  } else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) {
+    noteOffHandler(d1);
+  } else if (cmd === 0xb0) {
+    handleCC(d1, d2 / 127);
+  }
+}
+
+function allocateVoice() {
+  for (let v of synthVoices) if (!v.active) return v;
+  return synthVoices[0]; // none free - steal the oldest-triggered voice
+}
+
+function noteOnHandler(note, velocity) {
+  let v = allocateVoice();
+  v.noteOn(note, velocity);
+  synthVoices.splice(synthVoices.indexOf(v), 1);
+  synthVoices.push(v); // move to back so stealing stays round-robin
+
+  // a played note is a "beat" too - burst new growth and flash, the same
+  // mechanic the audio bass-onset detector uses for a loud hit
+  pulseFlash = min(1, pulseFlash + 0.35 + velocity * 0.55);
+  growColony(floor(map(velocity, 0, 1, 10, 90, true)));
+}
+
+function noteOffHandler(note) {
+  for (let v of synthVoices) if (v.note === note && v.active) v.noteOff(note);
+}
+
+function handleCC(cc, value) {
+  if (!(cc in knobCCMap)) {
+    if (Object.keys(knobCCMap).length >= knobSlots.length) return; // all slots claimed
+    knobCCMap[cc] = Object.keys(knobCCMap).length;
+    renderKnobUI();
+  }
+  knobValues[knobCCMap[cc]] = value;
+  applyKnobEffects();
+}
+
+function applyKnobEffects() {
+  if (!synthFilter) return;
+  synthFilter.freq(200 + knobValues[0] * 5800);
+  let release = 0.05 + knobValues[1] * 1.2;
+  for (let v of synthVoices) v.setRelease(release);
+  let waveType = knobValues[2] < 0.34 ? 'sine' : knobValues[2] < 0.67 ? 'triangle' : 'sawtooth';
+  for (let v of synthVoices) v.setWaveform(waveType);
+}
+
+function renderKnobUI() {
+  let list = document.getElementById('knobList');
+  list.innerHTML = '';
+  for (let cc in knobCCMap) {
+    let row = document.createElement('div');
+    row.textContent = 'CC' + cc + ' → ' + knobSlots[knobCCMap[cc]];
+    list.appendChild(row);
+  }
+}
+
+// ============================================================
+// RECORDING - captures the mixed mic+synth bus, local only
+// ============================================================
+function toggleRecording() {
+  if (!audioReady || !recordDest) return;
+  if (!isRecording) startRecording(); else stopRecording();
+}
+
+function startRecording() {
+  recordedChunks = [];
+  mediaRecorderObj = new MediaRecorder(recordDest.stream);
+  mediaRecorderObj.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+  mediaRecorderObj.onstop = () => {
+    let blob = new Blob(recordedChunks, { type: 'audio/webm' });
+    let url = URL.createObjectURL(blob);
+    let stamp = new Date().toLocaleTimeString().replace(/:/g, '-');
+    recordings.unshift({ url, name: 'slime-mold-session-' + stamp + '.webm' });
+    renderRecordingsList();
+  };
+  mediaRecorderObj.start();
+  isRecording = true;
+  updateRecordBtn();
+}
+
+function stopRecording() {
+  if (mediaRecorderObj && isRecording) {
+    mediaRecorderObj.stop();
+    isRecording = false;
+    updateRecordBtn();
+  }
+}
+
+function updateRecordBtn() {
+  let btn = document.getElementById('recBtn');
+  btn.textContent = isRecording ? '■ STOP' : '● RECORD';
+  btn.classList.toggle('recording', isRecording);
+}
+
+function renderRecordingsList() {
+  let list = document.getElementById('recordingsList');
+  list.innerHTML = '';
+  for (let r of recordings) {
+    let row = document.createElement('div');
+    row.className = 'recordingRow';
+    let a = document.createElement('a');
+    a.href = r.url;
+    a.download = r.name;
+    a.textContent = r.name;
+    row.appendChild(a);
+    list.appendChild(row);
+  }
+}
+
+// Live mic gain control - lets you find the right boost for your specific
+// mic by ear/eye instead of editing MIC_GAIN in code and reloading. Takes
+// effect immediately since it writes straight to the gain node's value.
+document.getElementById('micGainSlider').addEventListener('input', (e) => {
+  MIC_GAIN = parseFloat(e.target.value);
+  document.getElementById('micGainVal').textContent = MIC_GAIN + 'x';
+  if (micBoost) micBoost.amp(MIC_GAIN);
+});
+
+document.getElementById('startBtn').addEventListener('click', startAudio);
+document.getElementById('recBtn').addEventListener('click', toggleRecording);
+</script>
+
+</body>
+</html>

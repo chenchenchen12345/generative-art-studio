@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>SOUND GRID — AUDIO REACTIVE</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theme.css">
+<style>
+  body.kb {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 20px 50px;
+  }
+  .kb-nav { align-self: flex-start; padding: 0 0 14px; }
+  h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; margin: 0 0 6px; }
+  p.sub {
+    font-size: 13px; letter-spacing: 0.02em; line-height: 1.6; color: var(--kb-dim);
+    margin: 0 0 18px; text-align: center; max-width: 600px;
+  }
+  #canvas-holder {
+    border: 2px solid var(--kb-white);
+    background: #000;
+    overflow: hidden;
+    position: relative;
+  }
+  .panel {
+    margin-top: 18px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    max-width: 640px;
+    justify-content: center;
+    align-items: center;
+  }
+  .meterRow { display: flex; gap: 10px; align-items: center; font-size: 12px; letter-spacing: 0.08em; color: var(--kb-dim); text-transform: uppercase; }
+</style>
+</head>
+<body class="kb">
+
+<header class="kb-nav">
+  <a class="kb-backlink" href="index.html">&larr; Menu</a>
+</header>
+
+<h1>Sound Grid</h1>
+<p class="sub">Your microphone's spectrum, split into 24 frequency bands and scrolled top to bottom like a listening heatmap — the newest reading sits on top, older rows fade as they scroll down. Quiet bands stay small and red; loud bands swell and turn green. No toggles, just live sound.</p>
+
+<div id="canvas-holder">
+  <div class="kb-overlay" id="overlay">
+    <p>This needs mic access to analyze sound. Nothing is recorded or sent anywhere — analysis happens live in your browser.</p>
+    <button class="kb-button" id="startBtn">Start Audio + Enable Mic</button>
+  </div>
+</div>
+
+<div class="panel kb-panel">
+  <div class="meterRow">Bass <div class="kb-meter"><div class="kb-meter-fill" id="bassMeter"></div></div></div>
+  <div class="meterRow">Mid <div class="kb-meter"><div class="kb-meter-fill" id="midMeter"></div></div></div>
+  <div class="meterRow">Treble <div class="kb-meter"><div class="kb-meter-fill" id="trebMeter"></div></div></div>
+  <div class="meterRow">Volume <div class="kb-meter"><div class="kb-meter-fill" id="volMeter"></div></div></div>
+</div>
+
+<script>
+// ============================================================
+// SOUND GRID — mic spectrum rendered as a scrolling dot heatmap
+// ============================================================
+// Every ROW_INTERVAL_MS, the current spectrum is split into
+// NUM_COLS log-spaced frequency bands (so bass and treble each
+// get readable resolution instead of bass dominating a linear
+// scale) and pushed in as a new top row. Older rows shift down
+// and dim, like a rolling waterfall/calendar of what the mic
+// just heard. Dot size and color (red -> yellow -> green) both
+// track band energy, so louder/brighter bands read as bigger,
+// hotter dots.
+
+const DAY_LABELS = ['M', 'T', 'W', 'Th', 'F', 'S', 'Su'];
+const NUM_ROWS = DAY_LABELS.length;
+const NUM_COLS = 24;
+const SPACING = 22;
+const LEFT_MARGIN = 34;
+const TOP_MARGIN = 16;
+const RIGHT_MARGIN = 14;
+const BOTTOM_MARGIN = 26;
+const ROW_INTERVAL_MS = 150; // how often a new row scrolls in
+
+let mic, micBoost, fft, amp;
+let audioReady = false;
+let MIC_GAIN = 6;
+
+let history = []; // history[0] = newest row, each entry is an array of NUM_COLS values 0..1
+let lastRowTime = 0;
+
+function setup() {
+  let gridW = (NUM_COLS - 1) * SPACING;
+  let gridH = (NUM_ROWS - 1) * SPACING;
+  let cnv = createCanvas(LEFT_MARGIN + gridW + RIGHT_MARGIN, TOP_MARGIN + gridH + BOTTOM_MARGIN);
+  cnv.parent('canvas-holder');
+  document.getElementById('canvas-holder').style.width = width + 'px';
+  document.getElementById('canvas-holder').style.height = height + 'px';
+  colorMode(HSB, 360, 100, 100, 100);
+  textFont('monospace');
+  background(0);
+}
+
+function startAudio() {
+  userStartAudio().then(() => {
+    mic = new p5.AudioIn();
+    let rawConstraints = {
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      video: false
+    };
+    mic.start(() => {
+      micBoost = new p5.Gain();
+      micBoost.setInput(mic);
+      micBoost.amp(MIC_GAIN);
+
+      fft = new p5.FFT(0.6, 1024);
+      fft.setInput(micBoost);
+      amp = new p5.Amplitude();
+      amp.setInput(micBoost);
+
+      audioReady = true;
+      document.getElementById('overlay').style.display = 'none';
+    }, () => {
+      document.getElementById('overlay').innerHTML =
+        '<p>Mic access was blocked. Check your browser permissions and reload to try again.</p>';
+    }, rawConstraints);
+  });
+}
+
+// Buckets the linear FFT spectrum into NUM_COLS log-spaced
+// frequency bands, so each column reads as a musically useful
+// slice instead of the low end swallowing everything.
+function logBinnedSpectrum(spectrum) {
+  let sr = getAudioContext().sampleRate;
+  let nyquist = sr / 2;
+  let minF = 40;
+  let out = new Array(NUM_COLS).fill(0);
+  for (let b = 0; b < NUM_COLS; b++) {
+    let f0 = minF * Math.pow(nyquist / minF, b / NUM_COLS);
+    let f1 = minF * Math.pow(nyquist / minF, (b + 1) / NUM_COLS);
+    let i0 = constrain(floor((f0 / nyquist) * spectrum.length), 0, spectrum.length - 1);
+    let i1 = constrain(max(i0 + 1, floor((f1 / nyquist) * spectrum.length)), 0, spectrum.length);
+    let sum = 0, count = 0;
+    for (let i = i0; i < i1; i++) { sum += spectrum[i]; count++; }
+    out[b] = count > 0 ? (sum / count) / 255 : 0;
+  }
+  return out;
+}
+
+function draw() {
+  if (!audioReady) return;
+
+  let spectrum = fft.analyze();
+  let bass = fft.getEnergy('bass') / 255;
+  let mid = fft.getEnergy('mid') / 255;
+  let treble = fft.getEnergy('treble') / 255;
+  let volume = amp.getLevel();
+
+  document.getElementById('bassMeter').style.width = (bass * 100) + '%';
+  document.getElementById('midMeter').style.width = (mid * 100) + '%';
+  document.getElementById('trebMeter').style.width = (treble * 100) + '%';
+  document.getElementById('volMeter').style.width = (constrain(volume * 300, 0, 100)) + '%';
+
+  if (millis() - lastRowTime > ROW_INTERVAL_MS) {
+    history.unshift(logBinnedSpectrum(spectrum));
+    if (history.length > NUM_ROWS) history.pop();
+    lastRowTime = millis();
+  }
+
+  background(0);
+  drawGrid();
+  drawLabels();
+}
+
+function drawGrid() {
+  noStroke();
+  for (let i = 0; i < NUM_ROWS; i++) {
+    let row = history[i];
+    let rowAlpha = map(i, 0, NUM_ROWS - 1, 100, 35);
+    let y = TOP_MARGIN + i * SPACING;
+    for (let j = 0; j < NUM_COLS; j++) {
+      let x = LEFT_MARGIN + j * SPACING;
+      let v = row ? row[j] : 0;
+      if (v > 0.03) {
+        let d = map(v, 0, 1, 5, 24);
+        let hue = map(v, 0, 1, 0, 120);
+        drawingContext.shadowBlur = d * 0.8;
+        drawingContext.shadowColor = `hsla(${hue}, 90%, 55%, 0.9)`;
+        fill(hue, 85, 95, rowAlpha);
+        circle(x, y, d);
+        drawingContext.shadowBlur = 0;
+      } else {
+        fill(0, 0, 100, rowAlpha * 0.3);
+        circle(x, y, 3.5);
+      }
+    }
+  }
+}
+
+function drawLabels() {
+  noStroke();
+  fill(0, 0, 100, 55);
+  textSize(10);
+  textAlign(LEFT, CENTER);
+  for (let i = 0; i < NUM_ROWS; i++) {
+    text(DAY_LABELS[i], 4, TOP_MARGIN + i * SPACING);
+  }
+  textAlign(CENTER, TOP);
+  textSize(9);
+  let y = TOP_MARGIN + (NUM_ROWS - 1) * SPACING + 12;
+  for (let j = 0; j < NUM_COLS; j += 2) {
+    text(j + 1, LEFT_MARGIN + j * SPACING, y);
+  }
+}
+
+document.getElementById('startBtn').addEventListener('click', startAudio);
+</script>
+
+</body>
+</html>
